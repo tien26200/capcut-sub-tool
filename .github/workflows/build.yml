@@ -25,13 +25,7 @@ jobs:
         pip install pyinstaller
 
     - name: Build Executable with PyInstaller
-      run: |
-        pyinstaller --noconfirm --onedir --windowed --name "CapCutSubTool" ^
-          --copy-metadata faster_whisper ^
-          --copy-metadata ctranslate2 ^
-          --copy-metadata huggingface_hub ^
-          --copy-metadata tokenizers ^
-          capcut_sub_tool.py
+      run: pyinstaller --noconfirm --onedir --windowed --name "CapCutSubTool" --copy-metadata faster_whisper --copy-metadata ctranslate2 --copy-metadata huggingface_hub --copy-metadata tokenizers capcut_sub_tool.py
 
     - name: Download and Bundle FFmpeg
       run: |
