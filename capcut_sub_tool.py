@@ -207,8 +207,10 @@ class App(ctk.CTk):
     def _build_ui(self):
         root = ctk.CTkFrame(self, fg_color="transparent")
         root.pack(fill="both", expand=True, padx=22, pady=(16, 12))
+        root.grid_columnconfigure(0, weight=1)
+        root.grid_rowconfigure(1, weight=1)
         header = ctk.CTkFrame(root, fg_color="transparent")
-        header.pack(fill="x", pady=(0, 12))
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 12))
         ctk.CTkLabel(header, text="CC", font=("Segoe UI", 13, "bold"), text_color="#FFFFFF",
                      fg_color="#2864DC", corner_radius=11, width=46, height=42).pack(side="left", padx=(0, 12))
         title_box = ctk.CTkFrame(header, fg_color="transparent")
@@ -221,7 +223,7 @@ class App(ctk.CTk):
 
         body = ctk.CTkScrollableFrame(root, fg_color="transparent", corner_radius=0,
                                       scrollbar_button_color="#C9D3E2", scrollbar_button_hover_color="#9DACC2")
-        body.pack(fill="both", expand=True)
+        body.grid(row=1, column=0, sticky="nsew")
         body.grid_columnconfigure(0, weight=1, uniform="cards")
         body.grid_columnconfigure(1, weight=1, uniform="cards")
 
@@ -287,19 +289,20 @@ class App(ctk.CTk):
 
         # Fixed action bar stays visible regardless of the scroll position.
         footer = ctk.CTkFrame(root, fg_color="#FFFFFF", corner_radius=16, border_width=1, border_color="#E0E7F0")
-        footer.pack(fill="x", pady=(10, 0))
+        footer.grid(row=2, column=0, sticky="ew", pady=(10, 0))
+        footer.grid_columnconfigure(0, weight=1, minsize=150)
         left = ctk.CTkFrame(footer, fg_color="transparent")
-        left.pack(side="left", fill="x", expand=True, padx=14, pady=11)
-        self.status = ctk.CTkLabel(left, text="Sẵn sàng", text_color="#62718A", anchor="w", font=("Segoe UI", 11))
+        left.grid(row=0, column=0, sticky="ew", padx=14, pady=11)
+        self.status = ctk.CTkLabel(left, text="Sẵn sàng", text_color="#62718A", anchor="w", justify="left", wraplength=320, font=("Segoe UI", 11))
         self.status.pack(fill="x")
         self.progress = ctk.CTkProgressBar(left, height=5, corner_radius=5, progress_color="#2864DC")
         self.progress.pack(fill="x", pady=(7, 0)); self.progress.set(0)
         self.preview_btn = ctk.CTkButton(footer, text="Xem trước", height=42, width=110, corner_radius=11,
                                          fg_color="#E9EEF8", hover_color="#DDE6F5", text_color="#2A3C5D", command=self.preview)
-        self.preview_btn.pack(side="right", padx=(6, 10), pady=10)
+        self.preview_btn.grid(row=0, column=1, padx=(6, 10), pady=10)
         self.go_btn = ctk.CTkButton(footer, text="▶  BẮT ĐẦU TẠO PHỤ ĐỀ", height=42, width=218, corner_radius=11,
                                     font=("Segoe UI", 12, "bold"), command=self.start)
-        self.go_btn.pack(side="right", padx=(6, 0), pady=10)
+        self.go_btn.grid(row=0, column=2, padx=(0, 14), pady=10)
         self._mode_changed(self.mode.get())
 
     def _mode_changed(self, value):

@@ -1,9 +1,37 @@
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from capcut_sub_tool import chunk_words, draft_media, inject_to_capcut, make_subtitles
+
+
+@unittest.skipUnless(sys.platform == "win32", "Windows desktop layout test")
+class LayoutTests(unittest.TestCase):
+    def test_start_button_visible_at_minimum_window_size(self):
+        import customtkinter as ctk
+        from capcut_sub_tool import App
+        ctk.set_widget_scaling(1.0)
+        ctk.set_window_scaling(1.0)
+        with patch("capcut_sub_tool.discover_projects", return_value=[]):
+            app = App()
+        try:
+            for geometry in ("1040x820", "880x640"):
+                app.geometry(geometry)
+                app.status.configure(text="Đã lưu phụ đề. " + "Tên thư mục dự án rất dài/" * 8)
+                app.update()
+                button = app.go_btn
+                self.assertTrue(button.winfo_ismapped())
+                x = button.winfo_rootx() - app.winfo_rootx()
+                y = button.winfo_rooty() - app.winfo_rooty()
+                self.assertGreaterEqual(x, 0)
+                self.assertGreaterEqual(y, 0)
+                self.assertLessEqual(x + button.winfo_width(), app.winfo_width())
+                self.assertLessEqual(y + button.winfo_height(), app.winfo_height())
+        finally:
+            app.destroy()
 
 
 class SubtitleTests(unittest.TestCase):
