@@ -18,6 +18,23 @@ class LayoutTests(unittest.TestCase):
         with patch("capcut_sub_tool.discover_projects", return_value=[]):
             app = App()
         try:
+            app.mode.set("Từng từ (karaoke)")
+            app._mode_changed(app.mode.get())
+            self.assertEqual(app.sample_subs[0]["text"], "XIN")
+            app._set_color(0, "#00AAFF")
+            self.assertEqual(app.sample_text.cget("text_color"), "#00AAFF")
+            app.font_search.set("___no_matching_font___")
+            self.assertEqual(app.font_cb.cget("state"), "disabled")
+            app.font_search.set(app.fonts[0])
+            self.assertIn(app.fonts[0], app.font_cb.cget("values"))
+            app.font_search.set("")
+            app.mode.set("Theo số từ")
+            app._mode_changed(app.mode.get())
+            self.assertEqual(len(app.sample_subs[0]["text"].split()), 6)
+            app.color_mode.set("Đổi màu theo cụm")
+            app._refresh_sample()
+            app._step_sample(1)
+            self.assertEqual(app.sample_text.cget("text_color"), app.colors[1])
             for geometry in ("1040x820", "880x640"):
                 app.geometry(geometry)
                 app.status.configure(text="Đã lưu phụ đề. " + "Tên thư mục dự án rất dài/" * 8)

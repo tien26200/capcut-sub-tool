@@ -1,4 +1,5 @@
 import json
+import re
 import os
 import shutil
 import threading
@@ -259,28 +260,52 @@ class App(ctk.CTk):
         limit_row.pack(fill="x", padx=14, pady=(0, 11))
         self.limit_label = ctk.CTkLabel(limit_row, text="Số từ trong mỗi cụm", text_color="#43516A", font=("Segoe UI", 11))
         self.limit_label.pack(side="left", padx=11, pady=8)
-        self.limit = ctk.CTkOptionMenu(limit_row, values=[str(n) for n in range(2, 15)], width=94, corner_radius=9, height=32)
+        self.limit = ctk.CTkOptionMenu(limit_row, values=[str(n) for n in range(2, 15)], width=94, corner_radius=9, height=32, command=self._refresh_sample)
         self.limit.set("6"); self.limit.pack(side="right", padx=7, pady=6)
         ctk.CTkLabel(opts, text="NGÔN NGỮ VÀ MÀU", font=("Segoe UI", 10, "bold"), text_color="#718096").pack(anchor="w", padx=16, pady=(0, 5))
         setting_row = ctk.CTkFrame(opts, fg_color="transparent"); setting_row.pack(fill="x", padx=14, pady=(0, 12))
-        self.color_mode = ctk.CTkOptionMenu(setting_row, values=["Một màu", "Đổi màu theo cụm"], corner_radius=10, height=34)
+        self.color_mode = ctk.CTkOptionMenu(setting_row, values=["Một màu", "Đổi màu theo cụm"], corner_radius=10, height=34, command=self._refresh_sample)
         self.color_mode.set("Một màu"); self.color_mode.pack(side="left", fill="x", expand=True, padx=(0, 6))
         self.language = ctk.CTkOptionMenu(setting_row, values=["Tự nhận diện", "Tiếng Việt", "English"], corner_radius=10, height=34)
         self.language.set("Tiếng Việt"); self.language.pack(side="left", fill="x", expand=True, padx=(6, 0))
 
-        appearance = self._card(body, "04  ·  Kiểu chữ")
+        appearance = self._card(body, "04  ·  Studio chữ", "Chọn font, phối màu và xem mẫu ngay bên dưới.")
         appearance.grid(row=1, column=1, sticky="nsew", padx=(7, 0), pady=(0, 12))
         arow = ctk.CTkFrame(appearance, fg_color="transparent"); arow.pack(fill="x", padx=14, pady=(4, 12))
-        fonts = sorted({f.name for f in fm.fontManager.ttflist})
-        self.font_cb = ctk.CTkComboBox(arow, values=fonts, corner_radius=10, height=36)
-        self.font_cb.set("Arial" if "Arial" in fonts else (fonts[0] if fonts else "Arial")); self.font_cb.pack(fill="x", pady=(0, 8))
+        self.fonts = sorted({f.name for f in fm.fontManager.ttflist}) or ["Arial"]
+        ctk.CTkLabel(arow, text="TÌM FONT", font=("Segoe UI", 10, "bold"), text_color="#718096").pack(anchor="w")
+        self.font_search = ctk.StringVar()
+        ctk.CTkEntry(arow, textvariable=self.font_search, placeholder_text="Tìm font theo tên…", height=36, corner_radius=10).pack(fill="x", pady=(0, 6))
+        self.font_cb = ctk.CTkComboBox(arow, values=self.fonts, state="readonly", corner_radius=10, height=36, command=self._refresh_sample)
+        self.font_cb.set("Arial" if "Arial" in self.fonts else self.fonts[0])
+        self.font_cb.pack(fill="x", pady=(0, 4))
+        self.font_results = ctk.CTkLabel(arow, text=f"{len(self.fonts)} font trên máy", text_color="#718096", font=("Segoe UI", 10))
+        self.font_results.pack(anchor="w", pady=(0, 8))
+        self.font_search.trace_add("write", self._filter_fonts)
         color_row = ctk.CTkFrame(arow, fg_color="transparent"); color_row.pack(fill="x")
         self.color_buttons = []
         for i, color in enumerate(self.colors):
-            button = ctk.CTkButton(color_row, text=f"Màu {i+1}", height=32, corner_radius=10,
+            button = ctk.CTkButton(color_row, text=f"{i+1} · {color}", width=90, height=36, corner_radius=10,
                                    fg_color=color, hover_color=color, text_color="#202838" if color in ("#FFFFFF", "#FFE600") else "#FFFFFF",
                                    border_width=1, border_color="#D7DEEA", command=lambda j=i: self.pick_color(j))
             button.pack(side="left", fill="x", expand=True, padx=3); self.color_buttons.append(button)
+
+        sample = ctk.CTkFrame(appearance, fg_color="transparent")
+        sample.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(sample, text="MẪU MINH HỌA · THỜI GIAN GIẢ LẬP", text_color="#718096", font=("Segoe UI", 10)).pack(anchor="w", padx=16, pady=(0, 6))
+        stage = ctk.CTkFrame(sample, fg_color="#111C30", corner_radius=14)
+        stage.pack(fill="x", padx=14, pady=(0, 10))
+        ctk.CTkLabel(stage, text="SUBTITLE PREVIEW", text_color="#8D9DB8", font=("Segoe UI", 10, "bold")).pack(pady=(12, 4))
+        self.sample_text = ctk.CTkLabel(stage, text="", height=90, wraplength=340, font=("Arial", 22), text_color=self.colors[0])
+        self.sample_text.pack(fill="x", padx=20, pady=(0, 12))
+        nav = ctk.CTkFrame(sample, fg_color="transparent")
+        nav.pack(fill="x", padx=14, pady=(0, 12))
+        ctk.CTkButton(nav, text="←", width=38, height=30, command=lambda: self._step_sample(-1)).pack(side="left")
+        self.sample_info = ctk.CTkLabel(nav, text="", font=("Segoe UI", 10), text_color="#62718A", wraplength=260)
+        self.sample_info.pack(side="left", expand=True, fill="x", padx=8)
+        ctk.CTkButton(nav, text="→", width=38, height=30, command=lambda: self._step_sample(1)).pack(side="right")
+        self.sample_index = 0
+        self.sample_subs = []
 
         script_card = self._card(body, "05  ·  Kịch bản tùy chọn", "Để trống để dùng lời nhận diện. Kịch bản chỉ thay chữ khi số từ khớp.")
         script_card.grid(row=2, column=0, columnspan=2, sticky="nsew", pady=(0, 8))
@@ -325,6 +350,7 @@ class App(ctk.CTk):
             current, default = "—", "—"
         self.limit.configure(values=values, state="normal" if len(values) > 1 else "disabled")
         self.limit.set(current if current in values else default)
+        self._refresh_sample()
 
     def begin_pointer_pick(self, _event=None):
         if os.name != "nt":
@@ -505,12 +531,107 @@ class App(ctk.CTk):
         except Exception as exc:
             messagebox.showerror("Không đọc được dự án", str(exc), parent=self)
 
+    def _filter_fonts(self, *_args):
+        query = self.font_search.get().strip().casefold()
+        matches = [name for name in self.fonts if query in name.casefold()]
+        self.font_cb.configure(values=matches, state="readonly" if matches else "disabled")
+        self.font_results.configure(text=f"{len(matches)} font phù hợp · mở danh sách để chọn" if matches else "Không tìm thấy font · thử tên khác")
+
+    def _refresh_sample(self, _value=None):
+        if not hasattr(self, "sample_text"):
+            return
+        text = "Xin chào, đây là mẫu phụ đề của bạn. Hãy chọn cách chia và màu chữ phù hợp với video!"
+        words = [{"text": word, "start": i * 0.4, "end": (i + 1) * 0.4} for i, word in enumerate(text.split())]
+        mode = self.mode.get()
+        value = self.limit.get()
+        limit = float(value) if mode == "Theo thời lượng" else int(value) if mode in ("Theo số từ", "Theo ký tự") else 38
+        self.sample_subs = make_subtitles(words, mode, limit, self.color_mode.get())
+        self.sample_index = 0
+        self._render_sample()
+
+    def _step_sample(self, delta):
+        if self.sample_subs:
+            self.sample_index = (self.sample_index + delta) % len(self.sample_subs)
+            self._render_sample()
+
+    def _render_sample(self):
+        if not self.sample_subs:
+            return
+        sub = self.sample_subs[self.sample_index]
+        self.sample_text.configure(text=sub["text"], font=(self.font_cb.get(), 22),
+                                   text_color=self.colors[sub["color_index"] % len(self.colors)])
+        self.sample_info.configure(text=f"Cụm {self.sample_index + 1}/{len(self.sample_subs)} · {self.mode.get()} · {self.font_cb.get()}")
+
+    @staticmethod
+    def _color_ink(color):
+        r, g, b = [int(color[i:i+2], 16) for i in (1, 3, 5)]
+        return "#18243A" if 0.299*r + 0.587*g + 0.114*b > 155 else "#FFFFFF"
+
+    def _set_color(self, index, color):
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            raise ValueError("Nhập màu dạng #RRGGBB")
+        int(color[1:], 16)
+        color = color.upper()
+        self.colors[index] = color
+        self.color_buttons[index].configure(text=f"{index+1} · {color}", fg_color=color, hover_color=color, text_color=self._color_ink(color))
+        self._render_sample()
+
     def pick_color(self, index):
-        color = colorchooser.askcolor(color=self.colors[index], parent=self)[1]
-        if color:
-            self.colors[index] = color
-            self.color_buttons[index].configure(fg_color=color, hover_color=color,
-                                                 text_color="#202838" if color in ("#FFFFFF", "#FFE600") else "#FFFFFF")
+        win = ctk.CTkToplevel(self)
+        win.title(f"Màu phụ đề {index + 1}")
+        win.geometry("460x510")
+        win.resizable(False, False)
+        win.transient(self)
+        win.after(150, win.grab_set)
+        win.configure(fg_color="#F3F6FB")
+        ctk.CTkLabel(win, text="Phối màu phụ đề", font=("Segoe UI", 21, "bold"), text_color="#18243A").pack(anchor="w", padx=22, pady=(18, 10))
+        demo = ctk.CTkLabel(win, text="MẪU PHỤ ĐỀ CỦA BẠN", font=(self.font_cb.get(), 21),
+                            fg_color="#111C30", text_color=self.colors[index], corner_radius=14, height=100, wraplength=380)
+        demo.pack(fill="x", padx=20, pady=(0, 12))
+        value = ctk.StringVar(value=self.colors[index])
+        entry = ctk.CTkEntry(win, textvariable=value, height=36, corner_radius=10)
+        entry.pack(fill="x", padx=20, pady=(0, 8))
+        error = ctk.CTkLabel(win, text="HEX · nhập #RRGGBB hoặc kéo thanh RGB", text_color="#718096", font=("Segoe UI", 11))
+        error.pack()
+        sliders = []
+        def slide(_value=None):
+            value.set("#" + "".join(f"{round(slider.get()):02X}" for slider in sliders))
+        for channel, offset in zip(("R", "G", "B"), (1, 3, 5)):
+            row = ctk.CTkFrame(win, fg_color="transparent")
+            row.pack(fill="x", padx=20, pady=6)
+            ctk.CTkLabel(row, text=channel, width=24).pack(side="left")
+            slider = ctk.CTkSlider(row, from_=0, to=255, number_of_steps=255, command=slide)
+            slider.set(int(self.colors[index][offset:offset+2], 16))
+            slider.pack(side="left", expand=True, fill="x", padx=8)
+            sliders.append(slider)
+        def update(*_args):
+            color = value.get().strip()
+            try:
+                if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+                    raise ValueError()
+                int(color[1:], 16)
+                demo.configure(text_color=color)
+                for slider, offset in zip(sliders, (1, 3, 5)):
+                    slider.set(int(color[offset:offset+2], 16))
+                error.configure(text="Màu hợp lệ · mẫu cập nhật trực tiếp", text_color="#176B3A")
+                apply_btn.configure(state="normal")
+            except ValueError:
+                error.configure(text="Mã màu cần đủ 6 ký tự: #RRGGBB", text_color="#CB344D")
+                apply_btn.configure(state="disabled")
+        palette = ctk.CTkFrame(win, fg_color="transparent")
+        palette.pack(pady=10)
+        for color in ("#FFFFFF", "#FFE600", "#FF2A54", "#35D9AD", "#70B7FF", "#C599FF"):
+            ctk.CTkButton(palette, text="", width=48, height=30, corner_radius=8, fg_color=color, hover_color=color,
+                          command=lambda c=color: value.set(c)).pack(side="left", padx=4)
+        actions = ctk.CTkFrame(win, fg_color="transparent")
+        actions.pack(fill="x", padx=20, pady=12)
+        def apply():
+            self._set_color(index, value.get().strip())
+            win.destroy()
+        ctk.CTkButton(actions, text="Hủy", width=100, fg_color="#DFE6F1", text_color="#18243A", command=win.destroy).pack(side="left")
+        apply_btn = ctk.CTkButton(actions, text="Áp dụng màu", command=apply)
+        apply_btn.pack(side="right")
+        value.trace_add("write", update)
 
     def selected_media(self):
         try:
