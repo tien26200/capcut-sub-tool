@@ -27,6 +27,18 @@ class SubtitleTests(unittest.TestCase):
         self.assertEqual(len(sentence), 1)
         self.assertEqual(len(karaoke), 3)
 
+    def test_more_split_modes(self):
+        punctuation_words = [
+            {"text": "Một", "start": 0.0, "end": 0.4},
+            {"text": "hai,", "start": 0.4, "end": 0.8},
+            {"text": "ba", "start": 0.8, "end": 1.2},
+            {"text": "bốn.", "start": 1.2, "end": 1.8},
+        ]
+        punct = make_subtitles(punctuation_words, "Theo dấu câu", 38, "Một màu")
+        timed = make_subtitles(punctuation_words, "Theo thời lượng", 1.0, "Một màu")
+        self.assertEqual([x["text"] for x in punct], ["MỘT HAI,", "BA BỐN."])
+        self.assertEqual([x["text"] for x in timed], ["MỘT HAI,", "BA BỐN."])
+
     def test_draft_media_reads_clip_and_timeline_coordinates(self):
         with tempfile.TemporaryDirectory() as directory:
             draft_path = Path(directory) / "draft_content.json"

@@ -5,9 +5,9 @@
 ## Cách dùng
 
 1. Lưu dự án trong CapCut.
-2. Mở ứng dụng, bấm **Quét dự án** để tìm draft CapCut trên máy, hoặc chọn thư mục dự án.
+2. Trong app, kéo nút **KÉO TỚI CAPCUT** rồi thả lên cửa sổ CapCut để nhận diện cửa sổ và chọn draft đã lưu gần nhất. Có thể bấm **Quét** hoặc chọn thư mục dự án thay thế.
 3. Chọn clip trong dự án. Ứng dụng đọc đường dẫn nguồn và tọa độ clip trên timeline từ `draft_content.json`.
-4. Chọn cách chia: theo câu, số từ, độ dài dòng hoặc từng từ.
+4. Chọn cách chia: theo câu, dấu câu, số từ, số ký tự, thời lượng hoặc từng từ karaoke.
 5. Chọn ngôn ngữ tiếng Việt, tiếng Anh hoặc tự nhận diện; chỉnh màu nếu cần.
 6. Có thể xem trước phụ đề, sau đó bấm **Tạo phụ đề vào dự án**.
 
@@ -21,7 +21,7 @@ Nhận diện tiếng Việt bằng `faster-whisper` và sử dụng timestamp t
 
 ## Giới hạn hiện tại
 
-- CapCut không cung cấp cho ứng dụng này API điều khiển phiên đang mở. Vì vậy dự án được lấy từ draft đã lưu trên máy; cần lưu dự án trước khi quét và đóng CapCut trước lúc ghi.
+- CapCut không cung cấp cho ứng dụng này API điều khiển phiên đang mở. Con trỏ nhận diện cửa sổ CapCut và vị trí màn hình; app ghép với draft đã lưu gần nhất (hoặc tên dự án trùng tiêu đề cửa sổ). Hãy kiểm tra đúng tên dự án/clip trước khi ghi.
 - Chọn một clip mỗi lần. Nếu dự án có nhiều đoạn ghép nối, hãy xử lý từng clip hoặc dùng một clip nguồn đã ghép sẵn.
 - Model Whisper tải về khi chạy lần đầu, nên lần đó cần Internet.
 - Kiểm thử với bản sao dự án trước khi dùng trên công việc quan trọng.
