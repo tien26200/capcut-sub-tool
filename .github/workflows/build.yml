@@ -24,6 +24,9 @@ jobs:
         pip install -r requirements.txt
         pip install pyinstaller
 
+    - name: Test subtitle timing and project parsing
+      run: python -m unittest -v
+
     - name: Build Executable with PyInstaller
       run: pyinstaller --noconfirm --onedir --windowed --name "CapCutSubTool" --copy-metadata faster_whisper --copy-metadata ctranslate2 --copy-metadata huggingface_hub --copy-metadata tokenizers capcut_sub_tool.py
 

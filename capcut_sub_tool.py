@@ -1,252 +1,371 @@
-﻿import os
-import sys
 import json
-import uuid
+import os
+import shutil
 import threading
+from datetime import datetime
+import uuid
+from pathlib import Path
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, colorchooser
+from tkinter import colorchooser, filedialog, messagebox, ttk
+
 import matplotlib.font_manager as fm
-def hex_to_capcut_rgba(hex_code, alpha=1.0):
-    hex_code = hex_code.lstrip('#')
-    if len(hex_code) == 6:
-        r = int(hex_code[0:2], 16) / 255.0
-        g = int(hex_code[2:4], 16) / 255.0
-        b = int(hex_code[4:6], 16) / 255.0
-        return [round(r, 4), round(g, 4), round(b, 4), float(alpha)]
-    return [1.0, 1.0, 1.0, 1.0]
-def get_installed_fonts():
-    fonts = sorted(list(set([f.name for f in fm.fontManager.ttflist])))
-    return fonts
-def inject_to_capcut(draft_path, subtitles_data, font_name, colors):
-    if not os.path.exists(draft_path):
-        raise FileNotFoundError(f"Khong tim thay file: {draft_path}")
-    with open(draft_path, 'r', encoding='utf-8') as f:
-        draft = json.load(f)
-    if "materials" not in draft:
-        draft["materials"] = {}
-    if "texts" not in draft["materials"]:
-        draft["materials"]["texts"] = []
-    if "tracks" not in draft:
-        draft["tracks"] = []
-    text_track_id = str(uuid.uuid4())
-    new_track = {
-        "id": text_track_id,
-        "type": "text",
-        "segments": [],
-        "attribute": 0,
-        "flag": 0
-    }
-    for item in subtitles_data:
-        text_id = str(uuid.uuid4())
-        segment_id = str(uuid.uuid4())
-        part_idx = item.get("part_idx", 0)
-        if part_idx == 0:
-            c_hex = colors.get("part1", "#FFFFFF")
-        elif part_idx == 1:
-            c_hex = colors.get("part2", "#FFE600")
-        else:
-            c_hex = colors.get("part3", "#FF2A54")
-        rgba = hex_to_capcut_rgba(c_hex)
-        duration_us = max(0, item['end_us'] - item['start_us'])
-        text_content_obj = {
-            "styles": [{
-                "fill": {
-                    "alpha": 1.0,
-                    "content": {
-                        "render_type": "solid",
-                        "solid": {"color": [rgba[0], rgba[1], rgba[2]]}
-                    }
-                },
-                "range": [0, len(item['text'])],
-                "size": 8.0,
-                "font": {"path": font_name, "name": font_name}
-            }],
-            "text": item['text']
-        }
-        text_material = {
-            "id": text_id,
-            "type": "text",
-            "content": json.dumps(text_content_obj, ensure_ascii=False),
-            "font_path": font_name,
-            "text_color": rgba,
-            "border_color": [0.0, 0.0, 0.0, 1.0],
-            "border_width": 15.0,
-            "shadow_color": [0.0, 0.0, 0.0, 0.8],
-            "shadow_alpha": 0.8,
-            "shadow_point": {"x": 5.0, "y": -5.0},
-            "alignment": 1,
-            "typesetting": 0
-        }
-        draft["materials"]["texts"].append(text_material)
-        segment = {
-            "id": segment_id,
-            "material_id": text_id,
-            "render_index": 0,
-            "target_timerange": {
-                "start": item['start_us'],
-                "duration": duration_us
-            },
-            "source_timerange": {
-                "start": 0,
-                "duration": duration_us
-            },
-            "speed": 1.0,
-            "volume": 1.0
-        }
-        new_track["segments"].append(segment)
-    draft["tracks"].append(new_track)
-    with open(draft_path, 'w', encoding='utf-8') as f:
-        json.dump(draft, f, ensure_ascii=False, indent=2)
-class CapCutSubApp(tk.Tk):
+
+
+def rgba(hex_code):
+    value = hex_code.lstrip("#")
+    return [round(int(value[i:i + 2], 16) / 255, 4) for i in (0, 2, 4)] + [1.0]
+
+
+def discover_projects():
+    roots = []
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        roots.extend([
+            Path(local) / "CapCut" / "User Data" / "Projects",
+            Path(local) / "CapCut" / "User Data" / "Projects" / "com.lveditor.draft",
+            Path(local) / "JianyingPro" / "User Data" / "Projects",
+        ])
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        roots.append(Path(appdata) / "CapCut" / "User Data" / "Projects")
+    found = []
+    for root in roots:
+        if root.exists():
+            try:
+                found.extend(root.rglob("draft_content.json"))
+            except OSError:
+                continue
+    return sorted({p.resolve() for p in found if p.is_file()}, key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def draft_media(draft_path):
+    """Return video source files and the first timeline placement for each source."""
+    with open(draft_path, "r", encoding="utf-8-sig") as stream:
+        draft = json.load(stream)
+    materials = draft.get("materials", {})
+    videos = materials.get("videos", []) if isinstance(materials, dict) else []
+    if not isinstance(videos, list):
+        videos = []
+    by_id = {v.get("id"): v for v in videos if isinstance(v, dict) and v.get("id")}
+    placements = []
+    tracked_paths = set()
+    for track in draft.get("tracks", []):
+        if not isinstance(track, dict):
+            continue
+        for segment in track.get("segments", []):
+            material = by_id.get(segment.get("material_id"))
+            if not material:
+                continue
+            source = material.get("path") or material.get("material_path") or material.get("file_path")
+            if not source:
+                continue
+            timerange = segment.get("target_timerange", {}) or {}
+            source_range = segment.get("source_timerange", {}) or {}
+            placements.append({
+                "path": source,
+                "timeline_start": int(timerange.get("start", 0)),
+                "source_start": int(source_range.get("start", 0)),
+                "duration": int(source_range.get("duration", timerange.get("duration", 0))),
+            })
+            tracked_paths.add(os.path.normcase(os.path.normpath(source)))
+    # Some drafts only expose media paths without segment references.
+    for material in videos:
+        if isinstance(material, dict):
+            source = material.get("path") or material.get("material_path") or material.get("file_path")
+            if source and os.path.normcase(os.path.normpath(source)) not in tracked_paths:
+                placements.append({
+                    "path": source, "timeline_start": 0, "source_start": 0, "duration": 0,
+                })
+                tracked_paths.add(os.path.normcase(os.path.normpath(source)))
+    return draft, placements
+
+
+def chunk_words(words, mode, limit):
+    if not words:
+        return []
+    if mode == "Từng từ (karaoke)":
+        return [[w] for w in words]
+    if mode == "Theo câu":
+        groups, current = [], []
+        for word in words:
+            current.append(word)
+            if word["text"].rstrip().endswith((".", "!", "?", ";", ":")):
+                groups.append(current)
+                current = []
+        if current:
+            groups.append(current)
+        return groups
+    if mode == "Theo số từ":
+        return [words[i:i + limit] for i in range(0, len(words), limit)]
+    # Readability mode: break before a long line, keeping a practical word cap.
+    groups, current, chars = [], [], 0
+    for word in words:
+        length = len(word["text"].strip())
+        if current and (chars + length + 1 > limit or len(current) >= 14):
+            groups.append(current)
+            current, chars = [], 0
+        current.append(word)
+        chars += length + (1 if len(current) > 1 else 0)
+    if current:
+        groups.append(current)
+    return groups
+
+
+def make_subtitles(words, mode, limit, color_mode):
+    result = []
+    groups = chunk_words(words, mode, limit)
+    for index, group in enumerate(groups):
+        result.append({"text": " ".join(w["text"].strip() for w in group).upper(),
+                       "start_us": int(group[0]["start"] * 1e6), "end_us": int(group[-1]["end"] * 1e6),
+                       "color_index": index if color_mode == "Đổi màu theo cụm" else 0})
+    return result
+
+
+def inject_to_capcut(draft_path, subtitles, font_name, colors):
+    with open(draft_path, "r", encoding="utf-8-sig") as stream:
+        draft = json.load(stream)
+    draft.setdefault("materials", {}).setdefault("texts", [])
+    draft.setdefault("tracks", [])
+    track = {"id": str(uuid.uuid4()), "type": "text", "segments": [], "attribute": 0, "flag": 0}
+    for item in subtitles:
+        text_id, segment_id = str(uuid.uuid4()), str(uuid.uuid4())
+        color = rgba(colors[item.get("color_index", 0) % len(colors)])
+        duration = max(1, item["end_us"] - item["start_us"])
+        actual_font_path = fm.findfont(font_name, fallback_to_default=True)
+        style = {"fill": {"alpha": 1.0, "content": {"render_type": "solid", "solid": {"color": color[:3]}}},
+                 "range": [0, len(item["text"])], "size": 8.0,
+                 "font": {"path": actual_font_path, "name": font_name}}
+        material = {"id": text_id, "type": "text",
+                    "content": json.dumps({"styles": [style], "text": item["text"]}, ensure_ascii=False),
+                    "font_path": actual_font_path, "text_color": color, "border_color": [0, 0, 0, 1],
+                    "border_width": 15.0, "shadow_color": [0, 0, 0, 0.8], "shadow_alpha": 0.8,
+                    "shadow_point": {"x": 5.0, "y": -5.0}, "alignment": 1, "typesetting": 0}
+        draft["materials"]["texts"].append(material)
+        track["segments"].append({"id": segment_id, "material_id": text_id, "render_index": 0,
+                                  "target_timerange": {"start": item["start_us"], "duration": duration},
+                                  "source_timerange": {"start": 0, "duration": duration}, "speed": 1.0, "volume": 1.0})
+    draft["tracks"].append(track)
+    backup = draft_path + ".backup"
+    if os.path.exists(backup):
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = draft_path + f".{stamp}.backup"
+    shutil.copy2(draft_path, backup)
+    temp_path = draft_path + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as stream:
+        json.dump(draft, stream, ensure_ascii=False, indent=2)
+    os.replace(temp_path, draft_path)
+    return backup
+
+
+class App(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("CapCut Auto-Sub: 3-Stage Highlighter")
-        self.geometry("780x680")
-        self.resizable(False, False)
-        self.color_p1 = "#FFFFFF"
-        self.color_p2 = "#FFE600"
-        self.color_p3 = "#FF2A54"
-        self.setup_ui()
-    def setup_ui(self):
-        pad = {'padx': 10, 'pady': 5}
-        file_frame = ttk.LabelFrame(self, text=" 1. Thiết lập tệp tin ")
-        file_frame.pack(fill="x", **pad)
-        ttk.Label(file_frame, text="File Media (Audio/Video):").grid(row=0, column=0, sticky="w", **pad)
-        self.entry_media = ttk.Entry(file_frame, width=58)
-        self.entry_media.grid(row=0, column=1, **pad)
-        ttk.Button(file_frame, text="Browse...", command=self.browse_media).grid(row=0, column=2, **pad)
-        ttk.Label(file_frame, text="File draft_content.json:").grid(row=1, column=0, sticky="w", **pad)
-        self.entry_draft = ttk.Entry(file_frame, width=58)
-        self.entry_draft.grid(row=1, column=1, **pad)
-        ttk.Button(file_frame, text="Browse...", command=self.browse_draft).grid(row=1, column=2, **pad)
-        style_frame = ttk.LabelFrame(self, text=" 2. Tùy chọn Font & Màu Sắc Nhấn Nhá ")
-        style_frame.pack(fill="x", **pad)
-        ttk.Label(style_frame, text="Chọn Font:").grid(row=0, column=0, sticky="w", **pad)
-        fonts = get_installed_fonts()
-        self.font_cb = ttk.Combobox(style_frame, values=fonts, width=35)
-        default_font = "Arial" if "Arial" in fonts else (fonts[0] if fonts else "")
-        self.font_cb.set(default_font)
-        self.font_cb.grid(row=0, column=1, sticky="w", **pad)
-        color_box = ttk.Frame(style_frame)
-        color_box.grid(row=1, column=0, columnspan=3, pady=10, sticky="w")
-        ttk.Label(color_box, text="Đoạn 1:").pack(side="left", padx=5)
-        self.btn_col1 = tk.Button(color_box, text=self.color_p1, bg=self.color_p1, width=8,
-                                  command=lambda: self.pick_color(1))
-        self.btn_col1.pack(side="left", padx=5)
-        ttk.Label(color_box, text="Đoạn 2:").pack(side="left", padx=5)
-        self.btn_col2 = tk.Button(color_box, text=self.color_p2, bg=self.color_p2, width=8,
-                                  command=lambda: self.pick_color(2))
-        self.btn_col2.pack(side="left", padx=5)
-        ttk.Label(color_box, text="Đoạn 3:").pack(side="left", padx=5)
-        self.btn_col3 = tk.Button(color_box, text=self.color_p3, bg=self.color_p3, width=8,
-                                  command=lambda: self.pick_color(3))
-        self.btn_col3.pack(side="left", padx=5)
-        script_frame = ttk.LabelFrame(self, text=" 3. Kịch bản / Caption có sẵn (Mỗi câu 1 dòng) ")
-        script_frame.pack(fill="both", expand=True, **pad)
-        self.txt_script = tk.Text(script_frame, height=9, font=("Consolas", 10))
-        self.txt_script.pack(fill="both", expand=True, padx=5, pady=5)
-        action_frame = ttk.Frame(self)
-        action_frame.pack(fill="x", **pad)
-        self.lbl_status = ttk.Label(action_frame, text="Trạng thái: Sẵn sàng", foreground="gray")
-        self.lbl_status.pack(side="left", padx=5)
-        self.btn_start = ttk.Button(action_frame, text="TIẾN HÀNH XỬ LÝ & INJECT VÀO CAPCUT", command=self.run_process)
-        self.btn_start.pack(side="right", padx=5, pady=5)
-    def browse_media(self):
-        f = filedialog.askopenfilename(filetypes=[("Media Files", "*.mp4 *.mp3 *.wav *.m4a *.mov")])
-        if f:
-            self.entry_media.delete(0, tk.END)
-            self.entry_media.insert(0, f)
-    def browse_draft(self):
-        f = filedialog.askopenfilename(filetypes=[("CapCut Draft Content", "draft_content.json")])
-        if f:
-            self.entry_draft.delete(0, tk.END)
-            self.entry_draft.insert(0, f)
-    def pick_color(self, part):
-        initial = self.color_p1 if part == 1 else (self.color_p2 if part == 2 else self.color_p3)
-        col = colorchooser.askcolor(initialcolor=initial)[1]
-        if col:
-            if part == 1:
-                self.color_p1 = col
-                self.btn_col1.config(bg=col, text=col)
-            elif part == 2:
-                self.color_p2 = col
-                self.btn_col2.config(bg=col, text=col)
-            else:
-                self.color_p3 = col
-                self.btn_col3.config(bg=col, text=col)
-    def run_process(self):
-        media = self.entry_media.get().strip()
-        draft = self.entry_draft.get().strip()
-        raw_script = self.txt_script.get("1.0", tk.END).strip()
-        if not media or not os.path.exists(media):
-            messagebox.showerror("Lỗi", "Vui lòng chọn file Audio/Video hợp lệ!")
+        self.title("CapCut Subtitle Assistant")
+        self.geometry("940x760")
+        self.minsize(820, 650)
+        self.projects = {}
+        self.media_items = []
+        self.colors = ["#FFFFFF", "#FFE600", "#FF2A54"]
+        self._build_ui()
+        self.refresh_projects()
+
+    def _build_ui(self):
+        root = ttk.Frame(self, padding=14)
+        root.pack(fill="both", expand=True)
+        ttk.Label(root, text="CAPCUT SUBTITLE ASSISTANT", font=("Segoe UI", 16, "bold")).pack(anchor="w")
+        ttk.Label(root, text="Chọn dự án CapCut, lấy clip và tọa độ timeline từ draft, rồi tạo phụ đề theo cách bạn muốn.",
+                  wraplength=850).pack(anchor="w", pady=(2, 12))
+
+        project_box = ttk.LabelFrame(root, text="1. Dự án CapCut", padding=10)
+        project_box.pack(fill="x", pady=5)
+        row = ttk.Frame(project_box); row.pack(fill="x")
+        ttk.Label(row, text="Dự án:").pack(side="left")
+        self.project_cb = ttk.Combobox(row, state="readonly")
+        self.project_cb.pack(side="left", fill="x", expand=True, padx=8)
+        ttk.Button(row, text="Quét & lấy dự án", command=self.refresh_projects).pack(side="left", padx=3)
+        ttk.Button(row, text="Chọn thư mục dự án…", command=self.choose_project).pack(side="left", padx=3)
+        ttk.Label(project_box, text="Chọn dự án đã lưu hoặc quét thư mục draft. App đọc file dự án cục bộ; không cần nhập link hay tự chọn file video.",
+                  wraplength=850).pack(anchor="w", pady=(7, 0))
+        self.project_cb.bind("<<ComboboxSelected>>", self.load_project)
+
+        source_box = ttk.LabelFrame(root, text="2. Clip và vị trí trên timeline", padding=10)
+        source_box.pack(fill="x", pady=5)
+        self.media_cb = ttk.Combobox(source_box, state="readonly")
+        self.media_cb.pack(fill="x")
+        self.project_info = ttk.Label(source_box, text="Chọn dự án để đọc clip và tọa độ.")
+        self.project_info.pack(anchor="w", pady=(6, 0))
+
+        opts = ttk.LabelFrame(root, text="3. Cách chia phụ đề", padding=10)
+        opts.pack(fill="x", pady=5)
+        grid = ttk.Frame(opts); grid.pack(fill="x")
+        ttk.Label(grid, text="Kiểu chia:").grid(row=0, column=0, sticky="w", padx=4, pady=5)
+        self.mode = ttk.Combobox(grid, state="readonly", values=["Theo câu", "Theo số từ", "Theo độ dài dòng", "Từng từ (karaoke)"])
+        self.mode.set("Theo độ dài dòng"); self.mode.grid(row=0, column=1, sticky="ew", padx=4)
+        ttk.Label(grid, text="Số từ mỗi cụm:").grid(row=0, column=2, sticky="w", padx=4)
+        self.word_limit = ttk.Spinbox(grid, from_=2, to=14, width=6); self.word_limit.set("6"); self.word_limit.grid(row=0, column=3, padx=4)
+        ttk.Label(grid, text="Độ dài dòng (ký tự):").grid(row=1, column=0, sticky="w", padx=4, pady=5)
+        self.char_limit = ttk.Spinbox(grid, from_=20, to=100, width=6); self.char_limit.set("38"); self.char_limit.grid(row=1, column=1, sticky="w", padx=4)
+        ttk.Label(grid, text="Màu:").grid(row=1, column=2, sticky="w", padx=4)
+        self.color_mode = ttk.Combobox(grid, state="readonly", values=["Một màu", "Đổi màu theo cụm"])
+        self.color_mode.set("Một màu"); self.color_mode.grid(row=1, column=3, sticky="ew", padx=4)
+        ttk.Label(grid, text="Ngôn ngữ nhận diện:").grid(row=2, column=0, sticky="w", padx=4, pady=5)
+        self.language = ttk.Combobox(grid, state="readonly", values=["Tự nhận diện", "Tiếng Việt", "English"], width=18)
+        self.language.set("Tiếng Việt"); self.language.grid(row=2, column=1, sticky="w", padx=4)
+        grid.columnconfigure(1, weight=1); grid.columnconfigure(3, weight=1)
+
+        style = ttk.LabelFrame(root, text="4. Hiển thị", padding=10); style.pack(fill="x", pady=5)
+        fonts = sorted({f.name for f in fm.fontManager.ttflist})
+        ttk.Label(style, text="Font:").pack(side="left")
+        self.font_cb = ttk.Combobox(style, values=fonts, width=27)
+        self.font_cb.set("Arial" if "Arial" in fonts else (fonts[0] if fonts else "Arial")); self.font_cb.pack(side="left", padx=8)
+        self.color_buttons = []
+        for i, color in enumerate(self.colors):
+            button = tk.Button(style, text=f"Màu {i+1}", bg=color, width=9, command=lambda j=i: self.pick_color(j))
+            button.pack(side="left", padx=4); self.color_buttons.append(button)
+
+        script = ttk.LabelFrame(root, text="5. Kịch bản tùy chọn (để trống nếu muốn dùng lời nhận diện)", padding=8)
+        script.pack(fill="both", expand=True, pady=5)
+        self.script = tk.Text(script, height=8, wrap="word", font=("Segoe UI", 10))
+        self.script.pack(fill="both", expand=True)
+
+        bottom = ttk.Frame(root); bottom.pack(fill="x", pady=(8, 0))
+        self.status = ttk.Label(bottom, text="Sẵn sàng")
+        self.status.pack(side="left", fill="x", expand=True)
+        self.preview_btn = ttk.Button(bottom, text="Xem trước", command=self.preview)
+        self.preview_btn.pack(side="right", padx=5)
+        self.go_btn = ttk.Button(bottom, text="Tạo phụ đề vào dự án", command=self.start)
+        self.go_btn.pack(side="right")
+
+    def refresh_projects(self):
+        files = discover_projects()
+        self.projects = {str(p): str(p) for p in files}
+        self.project_cb["values"] = list(self.projects)
+        if files:
+            self.project_cb.current(0); self.load_project()
+            self.status.config(text=f"Đã tìm thấy {len(files)} dự án CapCut")
+        else:
+            self.status.config(text="Chưa tìm thấy dự án tự động; chọn thư mục dự án thủ công.")
+
+    def choose_project(self):
+        folder = filedialog.askdirectory(title="Chọn thư mục dự án CapCut")
+        if not folder: return
+        candidates = list(Path(folder).rglob("draft_content.json"))
+        if not candidates:
+            messagebox.showerror("Không tìm thấy draft", "Thư mục này không có draft_content.json.")
             return
-        if not draft or not os.path.exists(draft):
-            messagebox.showerror("Lỗi", "Vui lòng chọn file draft_content.json của CapCut!")
-            return
-        self.btn_start.config(state="disabled")
-        self.lbl_status.config(text="Đang nhận diện giọng nói và chia cụm 3 đoạn...", foreground="blue")
-        threading.Thread(target=self.worker_thread, args=(media, draft, raw_script), daemon=True).start()
-    def worker_thread(self, media_path, draft_path, script_text):
+        p = max(candidates, key=lambda x: x.stat().st_mtime)
+        key = str(p.resolve()); self.projects[key] = key
+        self.project_cb["values"] = list(self.projects); self.project_cb.set(key); self.load_project()
+
+    def load_project(self, _event=None):
+        path = self.project_cb.get()
+        if not path: return
         try:
-            from faster_whisper import WhisperModel
-            model = WhisperModel("base", device="cpu", compute_type="int8")
-            segments, _ = model.transcribe(media_path, word_timestamps=True, language="vi")
-            recognized_sentences = []
-            for seg in segments:
-                words = seg.words
-                if not words:
-                    continue
-                full_text = " ".join([w.word.strip() for w in words])
-                recognized_sentences.append({
-                    "start": seg.start,
-                    "end": seg.end,
-                    "words": words,
-                    "text": full_text
-                })
-            script_lines = [l.strip() for l in script_text.splitlines() if l.strip()]
-            subtitles_data = []
-            for i, item in enumerate(recognized_sentences):
-                display_text = script_lines[i] if i < len(script_lines) else item["text"]
-                words = display_text.split()
-                n = len(words)
-                total_duration = item["end"] - item["start"]
-                if n < 3:
-                    chunks = [words]
-                else:
-                    k, m = divmod(n, 3)
-                    chunks = [
-                        words[:k + (1 if m > 0 else 0)],
-                        words[k + (1 if m > 0 else 0): 2 * k + (1 if m > 1 else 0)],
-                        words[2 * k + (1 if m > 1 else 0):]
-                    ]
-                current_start = item["start"]
-                for p_idx, chunk in enumerate(chunks):
-                    if not chunk:
-                        continue
-                    part_text = " ".join(chunk).upper()
-                    part_duration = total_duration * (len(chunk) / n)
-                    part_end = current_start + part_duration
-                    subtitles_data.append({
-                        "text": part_text,
-                        "start_us": int(current_start * 1_000_000),
-                        "end_us": int(part_end * 1_000_000),
-                        "part_idx": p_idx
-                    })
-                    current_start = part_end
-            colors = {
-                "part1": self.color_p1,
-                "part2": self.color_p2,
-                "part3": self.color_p3
-            }
-            inject_to_capcut(draft_path, subtitles_data, self.font_cb.get(), colors)
-            self.lbl_status.config(text="Thành công! Đã chèn phụ đề vào CapCut.", foreground="green")
-            messagebox.showinfo("Hoàn tất", f"Đã inject thành công {len(subtitles_data)} phân đoạn subtitle vào dự án CapCut!")
-        except Exception as e:
-            self.lbl_status.config(text="Có lỗi xảy ra!", foreground="red")
-            messagebox.showerror("Lỗi thực thi", str(e))
-        finally:
-            self.btn_start.config(state="normal")
+            _, self.media_items = draft_media(path)
+            labels = []
+            for item in self.media_items:
+                exists = os.path.isfile(item["path"])
+                start = item["timeline_start"] / 1e6
+                label = f"{'✓' if exists else '⚠'} {Path(item['path']).name} | timeline {start:.2f}s | source {item['source_start']/1e6:.2f}s"
+                labels.append(label)
+            self.media_cb["values"] = labels
+            if labels: self.media_cb.current(0)
+            self.project_info.config(text=f"Draft: {path}\nĐọc được {len(labels)} nguồn video và vị trí timeline. Chỉ clip có đường dẫn tồn tại mới xử lý được.")
+        except Exception as exc:
+            messagebox.showerror("Không đọc được dự án", str(exc))
+
+    def pick_color(self, index):
+        color = colorchooser.askcolor(color=self.colors[index], parent=self)[1]
+        if color:
+            self.colors[index] = color; self.color_buttons[index].config(bg=color)
+
+    def selected_media(self):
+        index = self.media_cb.current()
+        if index < 0 or index >= len(self.media_items): raise ValueError("Dự án không có clip video để xử lý.")
+        item = self.media_items[index]
+        if not os.path.isfile(item["path"]): raise ValueError("Không tìm thấy file video nguồn trên máy:\n" + item["path"])
+        return item
+
+    def collect_settings(self):
+        item = dict(self.selected_media())
+        return {"media": item, "mode": self.mode.get(), "word_limit": int(self.word_limit.get()),
+                "char_limit": int(self.char_limit.get()), "color_mode": self.color_mode.get(),
+                "script": self.script.get("1.0", "end"), "font": self.font_cb.get(), "colors": list(self.colors),
+                "language": {"Tiếng Việt": "vi", "English": "en"}.get(self.language.get())}
+
+    def build_subs(self, settings):
+        item = settings["media"]
+        from faster_whisper import WhisperModel
+        model = WhisperModel("base", device="cpu", compute_type="int8")
+        segments, _ = model.transcribe(item["path"], word_timestamps=True,
+                                       language=settings["language"], vad_filter=True)
+        words = []
+        source_start = item["source_start"] / 1e6
+        source_end = source_start + item["duration"] / 1e6 if item["duration"] else None
+        offset = item["timeline_start"] / 1e6 - source_start
+        for segment in segments:
+            for word in segment.words or []:
+                if source_end and (word.end <= source_start or word.start >= source_end): continue
+                start = max(word.start, source_start)
+                end = min(word.end, source_end) if source_end else word.end
+                words.append({"text": word.word, "start": max(0, start + offset), "end": max(0.01, end + offset)})
+        script = [line.strip() for line in settings["script"].splitlines() if line.strip()]
+        warning = ""
+        if script:
+            # Preserve word timing from recognition; replace text only when token counts agree.
+            tokens = " ".join(script).split()
+            if len(tokens) == len(words):
+                for word, token in zip(words, tokens): word["text"] = token
+            else:
+                warning = f"Số từ kịch bản ({len(tokens)}) khác số từ nhận diện ({len(words)}); đã dùng lời nhận diện để tránh lệch thời gian. "
+        limit = settings["word_limit"] if settings["mode"] == "Theo số từ" else settings["char_limit"]
+        return make_subtitles(words, settings["mode"], limit, settings["color_mode"]), warning
+
+    def preview(self):
+        try:
+            settings = self.collect_settings()
+            self.status.config(text="Đang nhận diện để tạo bản xem trước…")
+            self.go_btn.config(state="disabled"); self.preview_btn.config(state="disabled")
+            threading.Thread(target=self._preview_worker, args=(settings,), daemon=True).start()
+        except Exception as exc: messagebox.showerror("Lỗi", str(exc))
+
+    def _preview_worker(self, settings):
+        try:
+            subs, warning = self.build_subs(settings)
+            lines = [f"{s['start_us']/1e6:7.2f}s  {s['text']}" for s in subs[:120]]
+            self.after(0, lambda: self._show_preview(subs, lines, warning))
+        except Exception as exc: self.after(0, lambda: self._finish(str(exc), error=True))
+
+    def _show_preview(self, subs, lines, warning):
+        win = tk.Toplevel(self); win.title(f"Xem trước — {len(subs)} phụ đề"); win.geometry("600x500")
+        box = tk.Text(win, wrap="none"); box.pack(fill="both", expand=True, padx=10, pady=10)
+        box.insert("1.0", "\n".join(lines)); box.config(state="disabled")
+        ttk.Label(win, text="Đang hiển thị tối đa 120 dòng đầu; thời gian đã cộng vị trí clip trên timeline.").pack(pady=(0, 8))
+        self._finish(f"{warning}Xem trước xong: {len(subs)} cụm phụ đề")
+
+    def start(self):
+        try:
+            path = self.project_cb.get()
+            if not path or not os.path.isfile(path): raise ValueError("Hãy chọn dự án CapCut trước.")
+            settings = self.collect_settings()
+            if messagebox.askyesno("Ghi phụ đề vào dự án?", "App sẽ tạo bản sao .backup rồi thêm track phụ đề vào draft_content.json. Hãy đóng dự án trong CapCut trước khi tiếp tục."):
+                self.go_btn.config(state="disabled"); self.preview_btn.config(state="disabled")
+                self.status.config(text="Đang nhận diện và căn theo clip/tọa độ timeline…")
+                threading.Thread(target=self._worker, args=(path, settings), daemon=True).start()
+        except Exception as exc: messagebox.showerror("Thiếu thông tin", str(exc))
+
+    def _worker(self, path, settings):
+        try:
+            subtitles, warning = self.build_subs(settings)
+            backup = inject_to_capcut(path, subtitles, settings["font"], settings["colors"])
+            self.after(0, lambda: self._finish(f"{warning}Đã thêm {len(subtitles)} phụ đề. Bản sao lưu: {backup}"))
+        except Exception as exc: self.after(0, lambda: self._finish(str(exc), error=True))
+
+    def _finish(self, text, error=False):
+        self.status.config(text=text)
+        self.go_btn.config(state="normal"); self.preview_btn.config(state="normal")
+        if error: messagebox.showerror("Không hoàn tất", text)
+
+
 if __name__ == "__main__":
-    app = CapCutSubApp()
-    app.mainloop()
+    App().mainloop()
